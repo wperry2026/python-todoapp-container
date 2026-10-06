@@ -1,0 +1,226 @@
+name: "Terraform ECS Deployment via OIDC"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches: 
+      - main
+      - dev
+
+permissions:
+  id-token: write   # Required for AWS OIDC authentication
+  contents: read    # Required to checkout the repository
+  pull-requests: write # Required to post/update PR comments
+
+jobs:
+  terraform:
+    name: "Lint, Scan & Deploy"
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: "ap-southeast-4"
+      ROLE_TO_ASSUME: "arn:aws:iam::096966628706:role/github-actions-terraform-cicd-role"
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # ==========================================
+      # 1. TFLint Output Capture
+      # ==========================================
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Init TFLint
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run TFLint
+        id: tflint
+        if: github.event_name == 'pull_request'
+        run: |
+          TFLINT_EXIT=0
+          TFLINT_OUT=$(tflint -f compact) || TFLINT_EXIT=$?
+          
+          if [ -z "$TFLINT_OUT" ]; then
+            TFLINT_OUT="✅ No issues found by TFLint."
+          fi
+
+          echo "TFLINT_OUTPUT<<EOF" >> $GITHUB_ENV
+          echo "$TFLINT_OUT" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          echo "TFLINT_EXIT_CODE=$TFLINT_EXIT" >> $GITHUB_ENV
+
+      # ==========================================
+      # 2. Trivy Output Capture
+      # ==========================================
+      - name: Run Trivy Security Scan
+        id: trivy
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          # Install official Trivy binary
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          
+          TRIVY_EXIT=0
+          trivy config . --severity HIGH,CRITICAL --format table --output trivy-report.txt || TRIVY_EXIT=$?
+          
+          TRIVY_OUT=$(cat trivy-report.txt 2>/dev/null || true)
+          if [ -z "$TRIVY_OUT" ]; then
+            TRIVY_OUT="✅ No HIGH or CRITICAL security vulnerabilities detected."
+          fi
+          
+          echo "TRIVY_OUTPUT<<EOF" >> $GITHUB_ENV
+          echo "$TRIVY_OUT" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          echo "TRIVY_EXIT_CODE=$TRIVY_EXIT" >> $GITHUB_ENV
+
+      # ==========================================
+      # 3. AWS OIDC Setup
+      # ==========================================
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActionsTerraformSession
+
+      # ==========================================
+      # 4. Terraform Setup & Plan
+      # ==========================================
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          PLAN_EXIT=0
+          PLAN_RAW=$(terraform plan -no-color -out=tfplan 2>&1) || PLAN_EXIT=$?
+
+          if [ $PLAN_EXIT -eq 0 ]; then
+            PLAN_OUTPUT=$(terraform show -no-color tfplan)
+          else
+            PLAN_OUTPUT="❌ Terraform Plan Failed:\n\n$PLAN_RAW"
+          fi
+
+          if [ ${#PLAN_OUTPUT} -gt 40000 ]; then
+            PLAN_OUTPUT="${PLAN_OUTPUT:0:40000}\n...\n(Plan output truncated due to size limit)"
+          fi
+
+          echo "PLAN_OUTPUT<<EOF" >> $GITHUB_ENV
+          echo "$PLAN_OUTPUT" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          echo "PLAN_EXIT_CODE=$PLAN_EXIT" >> $GITHUB_ENV
+
+      # ==========================================
+      # 5. Combined PR Comment Step
+      # ==========================================
+      - name: Post Combined Scan & Plan to PR
+        uses: actions/github-script@v7
+        if: always() && github.event_name == 'pull_request'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const botComment = comments.find(comment => {
+              return comment.user.type === 'Bot' && comment.body.includes('## Infrastructure Validation & Plan');
+            });
+
+            const tflintOutput = process.env.TFLINT_OUTPUT || 'No output step executed.';
+            const trivyOutput = process.env.TRIVY_OUTPUT || 'No output step executed.';
+            const planOutput = process.env.PLAN_OUTPUT || 'No plan step executed.';
+
+            const output = `## Infrastructure Validation & Plan 🚀
+
+            #### 1. 🔍 TFLint Summary
+            <details><summary>Show TFLint Results</summary>
+
+            \`\`\`text
+            ${tflintOutput}
+            \`\`\`
+
+            </details>
+
+            #### 2. 🛡️ Trivy Security Scan
+            <details><summary>Show Trivy Findings</summary>
+
+            \`\`\`text
+            ${trivyOutput}
+            \`\`\`
+
+            </details>
+
+            #### 3. 📋 Terraform Plan
+            <details><summary>Show Plan Output</summary>
+
+            \`\`\`hcl
+            ${planOutput}
+            \`\`\`
+
+            </details>
+
+            *Pusher: @${context.actor} | Event: \`${context.eventName}\`*`;
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: output
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: output
+              });
+            }
+
+      # ==========================================
+      # 6. Evaluate PR Check Failures
+      # ==========================================
+      - name: Verify Quality Gates
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          FAIL=0
+          if [ "${TFLINT_EXIT_CODE:-0}" -ne 0 ]; then
+            echo "❌ TFLint failed with exit code $TFLINT_EXIT_CODE"
+            FAIL=1
+          fi
+          if [ "${TRIVY_EXIT_CODE:-0}" -ne 0 ]; then
+            echo "❌ Trivy failed with exit code $TRIVY_EXIT_CODE"
+            FAIL=1
+          fi
+          if [ "${PLAN_EXIT_CODE:-0}" -ne 0 ]; then
+            echo "❌ Terraform Plan failed with exit code $PLAN_EXIT_CODE"
+            FAIL=1
+          fi
+
+          if [ $FAIL -ne 0 ]; then
+            exit 1
+          fi
+
+      # ==========================================
+      # 7. Terraform Apply (Runs strictly on merge to main)
+      # ==========================================
+      - name: Terraform Apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: terraform apply -auto-approve
