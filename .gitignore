@@ -1,0 +1,19 @@
+# Ignore local provider cache and state folders
+.terraform/
+
+# Ignore local state files (State should be stored in a remote backend like S3, GCS, etc.)
+*.tfstate
+*.tfstate.*
+
+# Ignore crash logs
+crash.log
+crash.*.log
+
+# Ignore sensitive variable files containing credentials
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# DO NOT IGNORE:
+# !.terraform.lock.hcl
