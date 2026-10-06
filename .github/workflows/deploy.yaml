@@ -21,7 +21,7 @@ jobs:
 
     env:
       AWS_REGION: "ap-southeast-4"
-      ROLE_TO_ASSUME: "arn:aws:iam::096966628706:role/github-actions-terraform-cicd-role"
+      ROLE_TO_ASSUME: "arn:aws:iam::096966628706:role/github-actions-ecs-cicd-role"
 
     steps:
       - name: Checkout Code
