@@ -14,7 +14,21 @@ resource "aws_cloudwatch_log_group" "ecs" {
 }
 
 #-----------------------------------
-# 3. ECS Task Definition
+# 3. Fetch an existing IAM Role from your AWS account
+#-----------------------------------
+data "aws_iam_role" "ecs_execution_role" {
+  name = "ecs-task-execution-role" # Replace with the exact name of your existing role in AWS
+}
+
+#-----------------------------------
+# 4. Fetch an existing ECR Repository from your AWS account
+#-----------------------------------
+data "aws_ecr_repository" "app" {
+  name = "todoapp" # Replace with the exact name of your existing ECR repository in AWS
+}
+
+#-----------------------------------
+# 5. ECS Task Definition
 #-----------------------------------
 resource "aws_ecs_task_definition" "app" {
   family                   = "todoapp-task"
@@ -22,7 +36,7 @@ resource "aws_ecs_task_definition" "app" {
   requires_compatibilities = ["FARGATE"]
   cpu                      = "512"
   memory                   = "1024"
-  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  execution_role_arn       = data.aws_iam_role.ecs_execution_role.arn
 
   container_definitions = jsonencode([
     {
@@ -51,7 +65,7 @@ resource "aws_ecs_task_definition" "app" {
 }
 
 #-----------------------------------
-# 4. ECS Service (Fargate)
+# 6. ECS Service (Fargate)
 #-----------------------------------
 resource "aws_ecs_service" "app" {
   name            = "todoapp-service"
