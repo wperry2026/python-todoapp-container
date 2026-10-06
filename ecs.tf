@@ -65,7 +65,24 @@ resource "aws_ecs_task_definition" "app" {
 }
 
 #-----------------------------------
-# 6. ECS Service (Fargate)
+# 6. Fetch existing subnets in your default VPC
+#-----------------------------------
+data "aws_subnets" "public" {
+  filter {
+    name   = "vpc-id"
+    values = ["vpc-06e719820f8b9a0e3"] # Replace with your VPC ID
+  }
+}
+
+#-----------------------------------
+# 7. Fetch existing Security Group
+#-----------------------------------
+data "aws_security_group" "http_sg" {
+  name = "todoapp-http-sg" # Replace with exact name in AWS
+}
+
+#-----------------------------------
+# 8. ECS Service (Fargate)
 #-----------------------------------
 resource "aws_ecs_service" "app" {
   name            = "todoapp-service"
@@ -75,8 +92,8 @@ resource "aws_ecs_service" "app" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.public[*].id # Use the public subnet created in network.tf
-    security_groups  = [aws_security_group.http_sg.id]
+    subnets          = data.aws_subnets.public[*].id # Use the public subnet created in network.tf
+    security_groups  = [data.aws_security_group.http_sg.id]
     assign_public_ip = true
   }
 }
