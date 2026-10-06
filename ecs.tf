@@ -78,7 +78,7 @@ data "aws_subnets" "public" {
 # 7. Fetch existing Security Group
 #-----------------------------------
 data "aws_security_group" "http_sg" {
-  name = "todoapp-http-sg" # Replace with exact name in AWS
+  name = "allow-http" # Replace with exact name in AWS
 }
 
 #-----------------------------------
