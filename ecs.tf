@@ -92,7 +92,7 @@ resource "aws_ecs_service" "app" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = data.aws_subnets.public[*].id # Use the public subnet created in network.tf
+    subnets          = data.aws_subnets.public.ids # Use the public subnet created in network.tf
     security_groups  = [data.aws_security_group.http_sg.id]
     assign_public_ip = true
   }
